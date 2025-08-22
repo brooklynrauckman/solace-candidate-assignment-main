@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useMemo, useCallback } from "react";
+import { useEffect, useState, useCallback } from "react";
 import { useDebounce } from "./hooks/useDebounce";
 import { Advocate } from "./types";
 import SearchSection from "./components/SearchSection";
@@ -17,6 +17,8 @@ export default function Home() {
     new Set()
   );
   const [isLoading, setIsLoading] = useState<boolean>(true);
+  const [totalCount, setTotalCount] = useState<number>(0);
+  const [totalPages, setTotalPages] = useState<number>(0);
 
   const toggleSpecialties = (advocateId: number) => {
     setExpandedSpecialties((prev) => {
@@ -30,62 +32,48 @@ export default function Home() {
     });
   };
 
-  // Debounce search term to avoid excessive filtering
+  // Debounce search term to avoid excessive API calls
   const debouncedSearchTerm = useDebounce(searchTerm, 300);
 
-  // Memoized filtering - only recalculates when advocates or search term changes
-  const filteredAdvocates = useMemo(() => {
-    if (!debouncedSearchTerm.trim()) return advocates;
+  // Fetch advocates with search and pagination
+  const fetchAdvocates = useCallback(
+    async (search: string, page: number) => {
+      setIsLoading(true);
 
-    const searchTerms = debouncedSearchTerm
-      .toLowerCase()
-      .split(" ")
-      .filter((term) => term.length > 0);
-
-    return advocates.filter((advocate) => {
-      // Check if ALL search terms match ANY field
-      return searchTerms.every((searchTerm) => {
-        return (
-          advocate.firstName.toLowerCase().includes(searchTerm) ||
-          advocate.lastName.toLowerCase().includes(searchTerm) ||
-          advocate.city.toLowerCase().includes(searchTerm) ||
-          advocate.degree.toLowerCase().includes(searchTerm) ||
-          advocate.specialties.some((specialty) =>
-            specialty.toLowerCase().includes(searchTerm)
-          ) ||
-          advocate.yearsOfExperience.toString().includes(searchTerm) ||
-          (advocate.phoneNumber
-            .toString()
-            .replace(/\D/g, "")
-            .includes(searchTerm.replace(/\D/g, "")) &&
-            searchTerm.replace(/\D/g, "").length > 0)
-        );
+      const params = new URLSearchParams({
+        page: page.toString(),
+        limit: pageSize.toString(),
       });
-    });
-  }, [advocates, debouncedSearchTerm]);
 
-  useEffect(() => {
-    setIsLoading(true);
-    fetch("/api/advocates")
-      .then((response) => {
-        response.json().then((jsonResponse) => {
-          setAdvocates(jsonResponse.data);
-          setIsLoading(false);
-        });
-      })
-      .catch((error) => {
+      if (search.trim()) {
+        params.append("search", search);
+      }
+
+      try {
+        const response = await fetch(`/api/advocates?${params}`);
+        const jsonResponse = await response.json();
+
+        if (jsonResponse.error) {
+          console.error("API Error:", jsonResponse.error);
+          return;
+        }
+
+        setAdvocates(jsonResponse.data);
+        setTotalCount(jsonResponse.pagination.totalCount);
+        setTotalPages(jsonResponse.pagination.totalPages);
+      } catch (error) {
         console.error("Error fetching advocates:", error);
+      } finally {
         setIsLoading(false);
-      });
-  }, []);
-
-  // Pagination logic
-  const totalPages = Math.ceil(filteredAdvocates.length / pageSize);
-  const startIndex = (currentPage - 1) * pageSize;
-  const paginatedAdvocates = filteredAdvocates.slice(
-    startIndex,
-    startIndex + pageSize
+      }
+    },
+    [pageSize]
   );
+
+  // Fetch data when search term or page changes
+  useEffect(() => {
+    fetchAdvocates(debouncedSearchTerm, currentPage);
+  }, [debouncedSearchTerm, currentPage, fetchAdvocates]);
 
   // Reset to first page when search changes
   useEffect(() => {
@@ -122,16 +110,16 @@ export default function Home() {
       />
 
       <ResultsInfo
-        startIndex={startIndex}
+        startIndex={(currentPage - 1) * pageSize}
         pageSize={pageSize}
-        totalResults={filteredAdvocates.length}
+        totalResults={totalCount}
         currentPage={currentPage}
         totalPages={totalPages}
         isLoading={isLoading}
       />
 
       <AdvocatesTable
-        advocates={paginatedAdvocates}
+        advocates={advocates}
         expandedSpecialties={expandedSpecialties}
         onToggleSpecialties={toggleSpecialties}
         isLoading={isLoading}
